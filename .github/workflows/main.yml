@@ -1,0 +1,186 @@
+name: Build TWRP Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: 'TWRP Manifest Branch (twrp-12.1/twrp-14)'
+        required: true
+        default: 'twrp-12.1'
+        type: choice
+        options:
+          - twrp-12.1
+          - twrp-14
+      device_path:
+        description: 'Device Path (e.g., device/xiaomi/maya)'
+        required: true
+        default: 'device/xiaomi/maya'
+      device_name:
+        description: 'Device Name (e.g., maya)'
+        required: true
+        default: 'maya'
+      build_target:
+        description: 'Build Target'
+        required: true
+        default: 'recovery'
+        type: choice
+        options:
+          - recovery
+          - boot
+          - vendorboot
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    
+    steps:
+    - name: Checkout Device Tree
+      uses: actions/checkout@v4
+      with:
+        path: device-tree
+        
+    - name: Setup Build Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git-core gnupg flex bison build-essential zip curl \
+          zlib1g-dev libc6-dev-i386 libncurses5 \
+          lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev \
+          libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+          bc libstdc++6 libssl-dev rsync
+          
+    - name: Setup Git
+      run: |
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+    - name: Install Repo Tool
+      run: |
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo "${HOME}/bin" >> $GITHUB_PATH
+        
+    - name: Setup Swap Space
+      run: |
+        sudo swapoff -a
+        sudo fallocate -l 16G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        free -h
+        
+    - name: Sync TWRP Sources
+      run: |
+        mkdir -p ${{ github.workspace }}/workspace
+        cd ${{ github.workspace }}/workspace
+        
+        # 初始化 TWRP 仓库
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ github.event.inputs.manifest_branch }}
+        
+        # 同步源码（只同步必要项目，加速下载）
+        repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --optimized-fetch
+        
+    - name: Copy Device Tree
+      run: |
+        # 创建设备目录
+        mkdir -p ${{ github.workspace }}/workspace/${{ github.event.inputs.device_path }}
+        
+        # 复制设备树文件到对应位置
+        cp -r ${{ github.workspace }}/device-tree/* ${{ github.workspace }}/workspace/${{ github.event.inputs.device_path }}/
+        
+        # 验证文件结构
+        echo "Device tree structure:"
+        ls -la ${{ github.workspace }}/workspace/${{ github.event.inputs.device_path }}/
+        
+    - name: Build Recovery
+      run: |
+        cd ${{ github.workspace }}/workspace
+        
+        # 设置环境变量
+        export ALLOW_MISSING_DEPENDENCIES=true
+        export LC_ALL=C
+        export USE_NINJA=false
+        
+        # 初始化构建环境
+        source build/envsetup.sh
+        
+        # 选择设备
+        lunch twrp_${{ github.event.inputs.device_name }}-eng
+        
+        # 根据目标编译
+        case "${{ github.event.inputs.build_target }}" in
+          recovery)
+            mka recoveryimage
+            ;;
+          boot)
+            mka bootimage
+            ;;
+          vendorboot)
+            mka vendorbootimage
+            ;;
+        esac
+        
+    - name: Check Build Output
+      run: |
+        cd ${{ github.workspace }}/workspace
+        echo "Checking out directory..."
+        find out -name "*.img" -type f 2>/dev/null | head -20 || true
+        
+    - name: Prepare Release Files
+      run: |
+        mkdir -p ${{ github.workspace }}/release
+        cd ${{ github.workspace }}/workspace
+        
+        # 查找编译生成的镜像
+        RECOVERY_IMG=$(find out -name "recovery.img" -o -name "boot.img" -o -name "vendor_boot.img" | head -1)
+        
+        if [ -f "$RECOVERY_IMG" ]; then
+          echo "Found image: $RECOVERY_IMG"
+          cp "$RECOVERY_IMG" ${{ github.workspace }}/release/
+          
+          # 同时复制到已知路径方便上传
+          PRODUCT_OUT=$(dirname "$RECOVERY_IMG")
+          if [ -d "$PRODUCT_OUT" ]; then
+            cp -r $PRODUCT_OUT/*.img ${{ github.workspace }}/release/ 2>/dev/null || true
+          fi
+        else
+          echo "Warning: No recovery image found, checking out directory structure..."
+          find out -type f -name "*.img" 2>/dev/null || true
+        fi
+        
+        # 列出发布目录
+        ls -la ${{ github.workspace }}/release/
+        
+    - name: Upload Recovery Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: twrp-${{ github.event.inputs.device_name }}-${{ github.event.inputs.manifest_branch }}
+        path: ${{ github.workspace }}/release/*.img
+        if-no-files-found: warn
+        
+    - name: Create Release
+      if: success()
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: twrp-${{ github.event.inputs.device_name }}-${{ github.run_number }}
+        name: TWRP for ${{ github.event.inputs.device_name }} (${{ github.event.inputs.manifest_branch }})
+        body: |
+          ## TWRP Recovery Build
+          
+          - **Device:** ${{ github.event.inputs.device_name }}
+          - **Manifest:** ${{ github.event.inputs.manifest_branch }}
+          - **Build Target:** ${{ github.event.inputs.build_target }}
+          - **Build Date:** ${{ github.event.head_commit.timestamp }}
+          
+          ### 安装说明
+          1. 下载对应的 .img 文件
+          2. 使用 fastboot 刷入：
+             ```bash
+             fastboot flash ${{ github.event.inputs.build_target }} *.img
+             ```
+          3. 或者使用 TWRP 安装 zip 刷入
+        files: ${{ github.workspace }}/release/*.img
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
