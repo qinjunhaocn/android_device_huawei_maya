@@ -1,20 +1,20 @@
 name: Build TWRP for Honor 6 Play (MYA)
 
-on:
+于:
   workflow_dispatch:
     inputs:
       build_target:
         description: 'Build Target'
         required: true
-        default: 'recovery'
-        type: choice
+        默认: 'recovery'
+        输入: choice
         options:
           - recovery
           - boot
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     
     steps:
