@@ -11,9 +11,11 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+    # 1️⃣ 拉取你的仓库
     - name: Checkout device tree
       uses: actions/checkout@v4
 
+    # 2️⃣ 安装依赖
     - name: Install dependencies
       run: |
         sudo dpkg --add-architecture i386
@@ -23,8 +25,9 @@ jobs:
           zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
           lib32ncurses5-dev x11proto-core-dev libx11-dev \
           lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc \
-          unzip fontconfig
+          unzip fontconfig bc rsync
 
+    # 3️⃣ 安装 repo 工具
     - name: Setup repo tool
       run: |
         mkdir -p ~/bin
@@ -32,19 +35,22 @@ jobs:
         chmod a+x ~/bin/repo
         echo "$HOME/bin" >> $GITHUB_PATH
 
+    # 4️⃣ 初始化 TWRP 源码 (platform_manifest_twrp_omni)
     - name: Initialize TWRP source
       run: |
         mkdir twrp
         cd twrp
-        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-9.0
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git -b twrp-9.0
         repo sync -j$(nproc)
 
+    # 5️⃣ 移动你的设备树到源码目录
     - name: Move device tree
       run: |
         cd twrp
         mkdir -p device/huawei
         mv ../android_device_huawei_maya device/huawei/maya
 
+    # 6️⃣ 编译 recovery
     - name: Build recovery
       run: |
         cd twrp
@@ -53,6 +59,7 @@ jobs:
         make clean
         make recoveryimage -j$(nproc)
 
+    # 7️⃣ 上传 recovery.img
     - name: Upload recovery
       uses: actions/upload-artifact@v4
       with:
