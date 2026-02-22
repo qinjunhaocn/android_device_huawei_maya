@@ -47,8 +47,8 @@ jobs:
     - name: Move device tree
       run: |
         cd twrp
-        mkdir -p device/huawei
-        mv ../android_device_huawei_maya device/huawei/maya
+        mkdir -p device/huawei/maya
+        rsync -a --exclude twrp --exclude .git $GITHUB_WORKSPACE/ device/huawei/maya/
 
     # 6️⃣ 编译 recovery
     - name: Build recovery
