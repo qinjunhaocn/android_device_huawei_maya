@@ -1,188 +1,60 @@
-name: Build TWRP for Honor 6 Play (MYA)
+name: Build TWRP for maya
 
 on:
   workflow_dispatch:
-    inputs:
-      build_target:
-        description: 'Build Target'
-        required: true
-        default: 'recovery'
-        type: choice
-        options:
-          - recovery
-          - boot
+  push:
+    branches:
+      - main
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    
+    runs-on: ubuntu-22.04
+
     steps:
-      - name: Checkout Device Tree
-        uses: actions/checkout@v4
-        with:
-          path: device/huawei/mya
-          
-      - name: Setup Build Environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git-core gnupg flex bison gperf build-essential \
-            zip curl zlib1g-dev gcc-multilib g++-multilib \
-            libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev \
-            libx11-dev lib32z-dev ccache libgl1-mesa-dev \
-            libxml2-utils xsltproc unzip python3 python3-pip \
-            bc libncurses5-dev libncursesw5-dev libssl-dev \
-            repo
-          
-          # Android 6.0 需要 Python 2
-          sudo apt-get install -y python2
-          sudo ln -sf /usr/bin/python2 /usr/bin/python
-          
-          # 配置 git
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          
-      - name: Setup Repo Tool
-        run: |
-          mkdir -p ~/bin
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
-          chmod a+x ~/bin/repo
-          echo "${HOME}/bin" >> $GITHUB_PATH
-          
-      - name: Initialize TWRP Manifest (Android 6.0)
-        run: |
-          mkdir -p ${{ github.workspace }}/workspace
-          cd ${{ github.workspace }}/workspace
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git -b twrp-6.0 --depth=1
-          
-      - name: Sync Source Code
-        run: |
-          cd ${{ github.workspace }}/workspace
-          repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all) || repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all)
-          
-      - name: Move Device Tree to Correct Location
-        run: |
-          # 创建工作目录结构
-          mkdir -p ${{ github.workspace }}/workspace/device/huawei
-          
-          # 移动已检出的设备树到正确位置
-          mv ${{ github.workspace }}/device/huawei/mya ${{ github.workspace }}/workspace/device/huawei/
-          
-          # 验证文件
-          ls -la ${{ github.workspace }}/workspace/device/huawei/mya/
-          
-      - name: Pre-build Setup (Android 6.0 Legacy Fixes)
-        run: |
-          cd ${{ github.workspace }}/workspace
-          
-          # 安装 Java 8
-          sudo apt-get install -y openjdk-8-jdk
-          export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
-          
-          # 修复权限
-          chmod +x device/huawei/mya/vendorsetup.sh 2>/dev/null || true
-          
-      - name: Build TWRP
-        run: |
-          cd ${{ github.workspace }}/workspace
-          
-          export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-          export PATH=$JAVA_HOME/bin:$PATH
-          export ALLOW_MISSING_DEPENDENCIES=true
-          
-          source build/envsetup.sh
-          
-          # 尝试可能的设备名组合
-          lunch omni_maya-eng || lunch twrp_maya-eng || lunch omni_mya-eng || lunch twrp_mya-eng
-          
-          make -j$(nproc --all) ${{ github.event.inputs.build_target }}image
-          
-      - name: Check Build Output
-        if: always()
-        run: |
-          cd ${{ github.workspace }}/workspace
-          find out/target/product -name "*.img" -o -name "recovery*" 2>/dev/null | head -20 || true
-          ls -la out/target/product/*/ 2>/dev/null || echo "Build directory not found"
-          
-      - name: Package Recovery
-        if: success()
-        run: |
-          cd ${{ github.workspace }}/workspace/out/target/product
-          
-          PRODUCT_DIR=$(ls -d */ | head -1)
-          cd "$PRODUCT_DIR"
-          
-          mkdir -p ${{ github.workspace }}/output
-          
-          if [ -f "recovery.img" ]; then
-            cp recovery.img ${{ github.workspace }}/output/TWRP_Honor6Play_${{ github.event.inputs.build_target }}.img
-          fi
-          
-          if ls *.zip 1> /dev/null 2>&1; then
-            cp *.zip ${{ github.workspace }}/output/
-          fi
-          
-          cat > ${{ github.workspace }}/output/flash_instructions.txt << 'EOF'
-          荣耀畅玩6 (Honor 6 Play / MYA-AL10) TWRP 刷入方法：
-          
-          方法1 - Fastboot 刷入（推荐）：
-          1. 解锁 Bootloader
-          2. 进入 Fastboot 模式：关机后按住 音量下 + 电源键
-          3. fastboot flash recovery TWRP_Honor6Play_recovery.img
-          4. fastboot reboot recovery
-          
-          注意事项：
-          - 首次进入 TWRP 可能需要格式化 Data 分区
-          - 华为设备可能需要关闭强制加密
-          - MT6737T 芯片，Android 6.0 系统
-          EOF
-          
-      - name: Upload Build Artifacts
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: TWRP-Honor6Play-${{ github.run_number }}
-          path: ${{ github.workspace }}/output/*
-          retention-days: 30
-          
-      - name: Create Release
-        if: success()
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: twrp-honor6play-${{ github.run_number }}
-          name: TWRP for Honor 6 Play (Build ${{ github.run_number }})
-          body: |
-            ## TWRP Recovery for Honor 6 Play (MYA-AL10/MYA-TL10)
-            
-            **设备信息：**
-            - 型号：荣耀畅玩6 / Honor 6 Play
-            - 代号：MYA-AL10 / MYA-TL10
-            - 芯片：联发科 MT6737T
-            - 系统：Android 6.0 Marshmallow
-            - 内核：3.18.19
-            
-            **编译信息：**
-            - 构建目标：${{ github.event.inputs.build_target }}
-            - 工作流编号：${{ github.run_number }}
-            
-            **刷入方法：**
-            1. 解锁 Bootloader
-            2. 进入 Fastboot 模式（音量下 + 电源键）
-            3. fastboot flash recovery TWRP_Honor6Play_recovery.img
-            4. fastboot reboot recovery
-            
-            ⚠️ 刷机有风险，请备份重要数据！
-          files: ${{ github.workspace }}/output/*
-          draft: false
-          prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
-      - name: Cleanup
-        if: always()
-        run: |
-          cd ${{ github.workspace }}
-          rm -rf workspace
-          sudo apt-get clean
+    - name: Checkout device tree
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt update
+        sudo apt install -y \
+          git-core gnupg flex bison build-essential zip curl \
+          zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
+          lib32ncurses5-dev x11proto-core-dev libx11-dev \
+          lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc \
+          unzip fontconfig
+
+    - name: Setup repo tool
+      run: |
+        mkdir -p ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Initialize TWRP source
+      run: |
+        mkdir twrp
+        cd twrp
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-9.0
+        repo sync -j$(nproc)
+
+    - name: Move device tree
+      run: |
+        cd twrp
+        mkdir -p device/huawei
+        mv ../android_device_huawei_maya device/huawei/maya
+
+    - name: Build recovery
+      run: |
+        cd twrp
+        source build/envsetup.sh
+        lunch omni_maya-eng
+        make clean
+        make recoveryimage -j$(nproc)
+
+    - name: Upload recovery
+      uses: actions/upload-artifact@v4
+      with:
+        name: twrp-maya
+        path: twrp/out/target/product/maya/recovery.img
